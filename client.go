@@ -1,0 +1,252 @@
+package client
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"encoding/json"
+	"fmt"
+	"iter"
+	"net/http"
+	"sync"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/lubluniky/clob-client-go/internal/signing"
+	"github.com/lubluniky/clob-client-go/internal/transport"
+)
+
+// DefaultBaseURL is the production Polymarket CLOB API base URL.
+const DefaultBaseURL = "https://clob.polymarket.com"
+
+// ClobClient is the main client for interacting with the Polymarket CLOB API.
+type ClobClient struct {
+	http    *transport.HTTPClient
+	baseURL string
+	chainID int
+
+	// L1 auth (optional)
+	signer  *ecdsa.PrivateKey
+	address common.Address
+
+	// L2 auth (optional)
+	creds *ApiCreds
+
+	// HTTP transport options (applied in constructor)
+	httpOpts []transport.Option
+
+	// Internal caches
+	tickSizes sync.Map // token_id -> string (tick size)
+	negRisk   sync.Map // token_id -> bool
+	feeRates  sync.Map // token_id -> string
+}
+
+// ClientOption configures the ClobClient.
+type ClientOption func(*ClobClient)
+
+// WithSigner sets the ECDSA private key for L1 authentication.
+func WithSigner(key *ecdsa.PrivateKey) ClientOption {
+	return func(c *ClobClient) {
+		c.signer = key
+		c.address = crypto.PubkeyToAddress(key.PublicKey)
+	}
+}
+
+// WithCreds sets the API credentials for L2 authentication.
+func WithCreds(creds ApiCreds) ClientOption {
+	return func(c *ClobClient) {
+		c.creds = &creds
+	}
+}
+
+// WithBaseURL overrides the default API base URL.
+func WithBaseURL(url string) ClientOption {
+	return func(c *ClobClient) {
+		c.baseURL = url
+	}
+}
+
+// WithChainID sets the blockchain chain ID (default: 137 for Polygon mainnet).
+func WithChainID(id int) ClientOption {
+	return func(c *ClobClient) {
+		c.chainID = id
+	}
+}
+
+// WithHTTPOptions passes transport options to the underlying HTTP client.
+// These options are applied after the base URL is set, so order doesn't matter.
+func WithHTTPOptions(opts ...transport.Option) ClientOption {
+	return func(c *ClobClient) {
+		c.httpOpts = opts
+	}
+}
+
+// NewClobClient creates a new Polymarket CLOB client.
+func NewClobClient(opts ...ClientOption) *ClobClient {
+	c := &ClobClient{
+		baseURL: DefaultBaseURL,
+		chainID: PolygonChainID,
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	// Initialize HTTP client with final baseURL and any transport options.
+	c.http = transport.NewHTTPClient(c.baseURL, c.httpOpts...)
+	return c
+}
+
+// Address returns the client's Ethereum address (derived from signer key).
+func (c *ClobClient) Address() string {
+	return c.address.Hex()
+}
+
+// SetApiCreds updates the L2 API credentials on the client.
+func (c *ClobClient) SetApiCreds(creds ApiCreds) {
+	c.creds = &creds
+}
+
+// ---------------------------------------------------------------------------
+// Internal header helpers
+// ---------------------------------------------------------------------------
+
+// l0Headers returns headers for unauthenticated requests.
+func (c *ClobClient) l0Headers() http.Header {
+	return signing.BuildL0Headers()
+}
+
+// l1Headers returns EIP-712 signed headers for L1 requests.
+func (c *ClobClient) l1Headers(nonce int) (http.Header, error) {
+	if c.signer == nil {
+		return nil, &AuthError{Message: "signer key required for L1 authentication"}
+	}
+	return signing.BuildL1Headers(c.signer, c.chainID, nonce)
+}
+
+// l2Headers returns HMAC-signed headers for L2 requests.
+func (c *ClobClient) l2Headers(method, path, body string) (http.Header, error) {
+	if c.creds == nil {
+		return nil, &AuthError{Message: "API credentials required for L2 authentication"}
+	}
+	creds := signing.L2Credentials{
+		ApiKey:        c.creds.ApiKey,
+		ApiSecret:     c.creds.ApiSecret,
+		ApiPassphrase: c.creds.ApiPassphrase,
+		Address:       c.address.Hex(),
+	}
+	return signing.BuildL2Headers(creds, method, path, body)
+}
+
+// ---------------------------------------------------------------------------
+// Internal convenience helpers for JSON requests
+// ---------------------------------------------------------------------------
+
+// getJSON is a convenience helper for L0 GET requests that returns parsed JSON.
+func (c *ClobClient) getJSON(ctx context.Context, path string, query map[string]string) (json.RawMessage, error) {
+	resp, err := c.http.Get(ctx, path, c.l0Headers(), query)
+	if err != nil {
+		return nil, err
+	}
+	body, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(body), nil
+}
+
+// getL2JSON is a convenience helper for authenticated GET requests.
+func (c *ClobClient) getL2JSON(ctx context.Context, path string, query map[string]string) (json.RawMessage, error) {
+	headers, err := c.l2Headers("GET", path, "")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Get(ctx, path, headers, query)
+	if err != nil {
+		return nil, err
+	}
+	body, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(body), nil
+}
+
+// postL2JSON posts JSON body with L2 auth and returns parsed response.
+func (c *ClobClient) postL2JSON(ctx context.Context, path string, reqBody interface{}) (json.RawMessage, error) {
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: marshalling body: %w", err)
+	}
+	headers, err := c.l2Headers("POST", path, string(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Post(ctx, path, headers, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	body, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(body), nil
+}
+
+// deleteL2JSON sends a DELETE with L2 auth and returns parsed response.
+func (c *ClobClient) deleteL2JSON(ctx context.Context, path string, reqBody interface{}) (json.RawMessage, error) {
+	var bodyStr string
+	if reqBody != nil {
+		bodyBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("polymarket: marshalling body: %w", err)
+		}
+		bodyStr = string(bodyBytes)
+	}
+	headers, err := c.l2Headers("DELETE", path, bodyStr)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Delete(ctx, path, headers, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	body, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(body), nil
+}
+
+// ---------------------------------------------------------------------------
+// Generic pagination iterator
+// ---------------------------------------------------------------------------
+
+// paginate returns an iterator that auto-paginates through API results.
+func paginate[T any](ctx context.Context, fetch func(cursor string) (PaginatedResponse[T], error)) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		cursor := ""
+		for {
+			page, err := fetch(cursor)
+			if err != nil {
+				var zero T
+				yield(zero, err)
+				return
+			}
+			for _, item := range page.Data {
+				if !yield(item, nil) {
+					return
+				}
+			}
+			if page.NextCursor == "" || page.NextCursor == "LTE=" {
+				return
+			}
+			cursor = page.NextCursor
+
+			// Check context
+			if ctx.Err() != nil {
+				var zero T
+				yield(zero, ctx.Err())
+				return
+			}
+		}
+	}
+}
