@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"strconv"
 
 	"github.com/lubluniky/clob-client-go/internal/transport"
 	"github.com/shopspring/decimal"
@@ -13,6 +14,23 @@ import (
 // ---------------------------------------------------------------------------
 // Single-resource market data methods (all L0 / public)
 // ---------------------------------------------------------------------------
+
+// GetOk returns a simple health-check payload from the root endpoint.
+func (c *ClobClient) GetOk(ctx context.Context) (string, error) {
+	resp, err := c.http.Get(ctx, "/", c.l0Headers(), nil)
+	if err != nil {
+		return "", err
+	}
+	raw, err := transport.ParseResponse(resp)
+	if err != nil {
+		return "", err
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+	return string(raw), nil
+}
 
 // ServerTime returns the server's current unix timestamp.
 func (c *ClobClient) ServerTime(ctx context.Context) (int64, error) {
@@ -42,6 +60,25 @@ func (c *ClobClient) GetMarkets(ctx context.Context) iter.Seq2[Market, error] {
 		var page PaginatedResponse[Market]
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return PaginatedResponse[Market]{}, fmt.Errorf("polymarket: parsing markets: %w", err)
+		}
+		return page, nil
+	})
+}
+
+// GetSamplingMarkets returns an iterator over sampling markets.
+func (c *ClobClient) GetSamplingMarkets(ctx context.Context) iter.Seq2[Market, error] {
+	return paginate[Market](ctx, func(cursor string) (PaginatedResponse[Market], error) {
+		query := map[string]string{}
+		if cursor != "" {
+			query["next_cursor"] = cursor
+		}
+		raw, err := c.getJSON(ctx, EndpointSamplingMarkets, query)
+		if err != nil {
+			return PaginatedResponse[Market]{}, err
+		}
+		var page PaginatedResponse[Market]
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return PaginatedResponse[Market]{}, fmt.Errorf("polymarket: parsing sampling markets: %w", err)
 		}
 		return page, nil
 	})
@@ -79,6 +116,25 @@ func (c *ClobClient) GetSimplifiedMarkets(ctx context.Context) iter.Seq2[Simplif
 	})
 }
 
+// GetSamplingSimplifiedMarkets returns an iterator over sampling simplified markets.
+func (c *ClobClient) GetSamplingSimplifiedMarkets(ctx context.Context) iter.Seq2[SimplifiedMarket, error] {
+	return paginate[SimplifiedMarket](ctx, func(cursor string) (PaginatedResponse[SimplifiedMarket], error) {
+		query := map[string]string{}
+		if cursor != "" {
+			query["next_cursor"] = cursor
+		}
+		raw, err := c.getJSON(ctx, EndpointSamplingSimplifiedMarkets, query)
+		if err != nil {
+			return PaginatedResponse[SimplifiedMarket]{}, err
+		}
+		var page PaginatedResponse[SimplifiedMarket]
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return PaginatedResponse[SimplifiedMarket]{}, fmt.Errorf("polymarket: parsing sampling simplified markets: %w", err)
+		}
+		return page, nil
+	})
+}
+
 // GetOrderBook returns the order book for a token.
 func (c *ClobClient) GetOrderBook(ctx context.Context, tokenID string) (*OrderBookSummary, error) {
 	raw, err := c.getJSON(ctx, EndpointOrderBook, map[string]string{"token_id": tokenID})
@@ -90,6 +146,23 @@ func (c *ClobClient) GetOrderBook(ctx context.Context, tokenID string) (*OrderBo
 		return nil, fmt.Errorf("polymarket: parsing order book: %w", err)
 	}
 	return &ob, nil
+}
+
+// GetOrderBooks returns order books for multiple tokens.
+func (c *ClobClient) GetOrderBooks(ctx context.Context, params []BookParams) ([]OrderBookSummary, error) {
+	resp, err := c.http.Post(ctx, EndpointOrderBooks, c.l0Headers(), params)
+	if err != nil {
+		return nil, err
+	}
+	data, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	var result []OrderBookSummary
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("polymarket: parsing order books: %w", err)
+	}
+	return result, nil
 }
 
 // GetMidpoint returns the midpoint price for a token.
@@ -153,7 +226,10 @@ func (c *ClobClient) GetLastTradePrice(ctx context.Context, tokenID string) (dec
 
 // GetMidpoints returns midpoint prices for multiple tokens.
 func (c *ClobClient) GetMidpoints(ctx context.Context, tokenIDs []string) (map[string]string, error) {
-	body := map[string]interface{}{"token_ids": tokenIDs}
+	body := make([]BookParams, 0, len(tokenIDs))
+	for _, tokenID := range tokenIDs {
+		body = append(body, BookParams{TokenID: tokenID})
+	}
 	resp, err := c.http.Post(ctx, EndpointMidpoints, c.l0Headers(), body)
 	if err != nil {
 		return nil, err
@@ -171,7 +247,10 @@ func (c *ClobClient) GetMidpoints(ctx context.Context, tokenIDs []string) (map[s
 
 // GetPrices returns best prices for multiple tokens.
 func (c *ClobClient) GetPrices(ctx context.Context, tokenIDs []string, side Side) (map[string]string, error) {
-	body := map[string]interface{}{"token_ids": tokenIDs, "side": string(side)}
+	body := make([]BookParams, 0, len(tokenIDs))
+	for _, tokenID := range tokenIDs {
+		body = append(body, BookParams{TokenID: tokenID, Side: side})
+	}
 	resp, err := c.http.Post(ctx, EndpointPrices, c.l0Headers(), body)
 	if err != nil {
 		return nil, err
@@ -189,7 +268,10 @@ func (c *ClobClient) GetPrices(ctx context.Context, tokenIDs []string, side Side
 
 // GetSpreads returns spreads for multiple tokens.
 func (c *ClobClient) GetSpreads(ctx context.Context, tokenIDs []string) (map[string]SpreadResponse, error) {
-	body := map[string]interface{}{"token_ids": tokenIDs}
+	body := make([]BookParams, 0, len(tokenIDs))
+	for _, tokenID := range tokenIDs {
+		body = append(body, BookParams{TokenID: tokenID})
+	}
 	resp, err := c.http.Post(ctx, EndpointSpreads, c.l0Headers(), body)
 	if err != nil {
 		return nil, err
@@ -207,7 +289,10 @@ func (c *ClobClient) GetSpreads(ctx context.Context, tokenIDs []string) (map[str
 
 // GetLastTradesPrices returns last trade prices for multiple tokens.
 func (c *ClobClient) GetLastTradesPrices(ctx context.Context, tokenIDs []string) (map[string]string, error) {
-	body := map[string]interface{}{"token_ids": tokenIDs}
+	body := make([]BookParams, 0, len(tokenIDs))
+	for _, tokenID := range tokenIDs {
+		body = append(body, BookParams{TokenID: tokenID})
+	}
 	resp, err := c.http.Post(ctx, EndpointLastTradesPrices, c.l0Headers(), body)
 	if err != nil {
 		return nil, err
@@ -221,6 +306,41 @@ func (c *ClobClient) GetLastTradesPrices(ctx context.Context, tokenIDs []string)
 		return nil, fmt.Errorf("polymarket: parsing last trade prices: %w", err)
 	}
 	return result, nil
+}
+
+// GetPricesHistory returns historical prices for market filters.
+func (c *ClobClient) GetPricesHistory(ctx context.Context, params PriceHistoryFilterParams) ([]MarketPrice, error) {
+	query := map[string]string{}
+	if params.Market != "" {
+		query["market"] = params.Market
+	}
+	if params.StartTS > 0 {
+		query["startTs"] = strconv.FormatInt(params.StartTS, 10)
+	}
+	if params.EndTS > 0 {
+		query["endTs"] = strconv.FormatInt(params.EndTS, 10)
+	}
+	if params.Fidelity > 0 {
+		query["fidelity"] = strconv.Itoa(params.Fidelity)
+	}
+	if params.Interval != "" {
+		query["interval"] = string(params.Interval)
+	}
+
+	raw, err := c.getJSON(ctx, EndpointPriceHistory, query)
+	if err != nil {
+		return nil, err
+	}
+	var prices []MarketPrice
+	if err := json.Unmarshal(raw, &prices); err != nil {
+		return nil, fmt.Errorf("polymarket: parsing prices history: %w", err)
+	}
+	return prices, nil
+}
+
+// GetServerTime is an alias for ServerTime.
+func (c *ClobClient) GetServerTime(ctx context.Context) (int64, error) {
+	return c.ServerTime(ctx)
 }
 
 // ---------------------------------------------------------------------------

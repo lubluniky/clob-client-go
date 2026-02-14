@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -56,6 +57,10 @@ type connection struct {
 	conn   *websocket.Conn
 	connMu sync.Mutex
 
+	// writeMu serialises all WebSocket write operations.
+	// gorilla/websocket does not support concurrent writers.
+	writeMu sync.Mutex
+
 	// Subscription tracking for reconnection
 	subsMu sync.Mutex
 	subs   []SubscriptionRequest // tracked for re-subscribe on reconnect
@@ -63,6 +68,10 @@ type connection struct {
 	// Message broadcast
 	listeners []listener
 	listMu    sync.Mutex
+	nextID    uint64
+
+	// closed is set by close() to signal that dispatch should stop.
+	closed bool
 
 	// Heartbeat tracking
 	lastPong time.Time
@@ -70,6 +79,7 @@ type connection struct {
 }
 
 type listener struct {
+	id        uint64
 	eventType string // filter by event_type, empty = all
 	ch        chan json.RawMessage
 }
@@ -115,8 +125,8 @@ func (c *connection) connectLoop() {
 		heartbeatCtx, heartbeatCancel := context.WithCancel(c.ctx)
 		go c.heartbeatLoop(heartbeatCtx)
 
-		// Read messages until error
-		c.readLoop()
+		// Read messages until error (pass conn directly to avoid racy read of c.conn)
+		c.readLoop(conn)
 
 		// Connection lost
 		heartbeatCancel()
@@ -134,9 +144,9 @@ func (c *connection) connectLoop() {
 }
 
 // readLoop reads messages from the WebSocket and dispatches to listeners.
-func (c *connection) readLoop() {
+func (c *connection) readLoop(conn *websocket.Conn) {
 	for {
-		_, message, err := c.conn.ReadMessage()
+		_, message, err := conn.ReadMessage()
 		if err != nil {
 			return
 		}
@@ -182,6 +192,11 @@ func (c *connection) dispatchSingle(data []byte) {
 	c.listMu.Lock()
 	defer c.listMu.Unlock()
 
+	// After close() has been called, listeners are closed; do not send.
+	if c.closed {
+		return
+	}
+
 	for _, l := range c.listeners {
 		if l.eventType == "" || l.eventType == raw.EventType {
 			select {
@@ -222,8 +237,11 @@ func (c *connection) heartbeatLoop(ctx context.Context) {
 				return
 			}
 
-			// Send PING as text message
-			if err := conn.WriteMessage(websocket.TextMessage, []byte("PING")); err != nil {
+			// Send PING as text message, holding writeMu to prevent concurrent writes
+			c.writeMu.Lock()
+			err := conn.WriteMessage(websocket.TextMessage, []byte("PING"))
+			c.writeMu.Unlock()
+			if err != nil {
 				return
 			}
 		}
@@ -231,11 +249,12 @@ func (c *connection) heartbeatLoop(ctx context.Context) {
 }
 
 // subscribe adds a listener and sends the subscription request.
-func (c *connection) subscribe(req SubscriptionRequest, eventType string) <-chan json.RawMessage {
+func (c *connection) subscribe(ctx context.Context, req SubscriptionRequest, eventType string) <-chan json.RawMessage {
 	ch := make(chan json.RawMessage, channelBufferSize)
+	id := atomic.AddUint64(&c.nextID, 1)
 
 	c.listMu.Lock()
-	c.listeners = append(c.listeners, listener{eventType: eventType, ch: ch})
+	c.listeners = append(c.listeners, listener{id: id, eventType: eventType, ch: ch})
 	c.listMu.Unlock()
 
 	// Track for reconnect
@@ -244,7 +263,12 @@ func (c *connection) subscribe(req SubscriptionRequest, eventType string) <-chan
 	c.subsMu.Unlock()
 
 	// Send subscription message
-	c.sendJSON(req)
+	_ = c.sendJSON(req)
+
+	go func() {
+		<-ctx.Done()
+		c.removeListener(id)
+	}()
 
 	return ch
 }
@@ -264,11 +288,14 @@ func (c *connection) resubscribe() {
 // sendJSON sends a JSON message over the WebSocket.
 func (c *connection) sendJSON(v interface{}) error {
 	c.connMu.Lock()
-	defer c.connMu.Unlock()
-	if c.conn == nil {
+	conn := c.conn
+	c.connMu.Unlock()
+	if conn == nil {
 		return fmt.Errorf("ws: not connected")
 	}
-	return c.conn.WriteJSON(v)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return conn.WriteJSON(v)
 }
 
 // backoff sleeps for an exponentially increasing duration with jitter.
@@ -298,13 +325,78 @@ func (c *connection) close() {
 	}
 	c.connMu.Unlock()
 
-	// Close all listener channels
+	// Mark closed before closing channels so dispatchSingle won't write to them.
 	c.listMu.Lock()
+	c.closed = true
 	for _, l := range c.listeners {
 		close(l.ch)
 	}
 	c.listeners = nil
 	c.listMu.Unlock()
+}
+
+func (c *connection) removeListener(id uint64) {
+	c.listMu.Lock()
+	defer c.listMu.Unlock()
+	if c.closed {
+		return
+	}
+	for i, l := range c.listeners {
+		if l.id != id {
+			continue
+		}
+		close(l.ch)
+		c.listeners = append(c.listeners[:i], c.listeners[i+1:]...)
+		return
+	}
+}
+
+// removeTrackedAssets removes subscriptions that match any of the given asset IDs.
+func (c *connection) removeTrackedAssets(assetIDs []string) {
+	remove := make(map[string]struct{}, len(assetIDs))
+	for _, id := range assetIDs {
+		remove[id] = struct{}{}
+	}
+	c.subsMu.Lock()
+	defer c.subsMu.Unlock()
+	filtered := c.subs[:0]
+	for _, sub := range c.subs {
+		keep := true
+		for _, id := range sub.AssetsIDs {
+			if _, ok := remove[id]; ok {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			filtered = append(filtered, sub)
+		}
+	}
+	c.subs = filtered
+}
+
+// removeTrackedMarkets removes subscriptions that match any of the given market IDs.
+func (c *connection) removeTrackedMarkets(markets []string) {
+	remove := make(map[string]struct{}, len(markets))
+	for _, m := range markets {
+		remove[m] = struct{}{}
+	}
+	c.subsMu.Lock()
+	defer c.subsMu.Unlock()
+	filtered := c.subs[:0]
+	for _, sub := range c.subs {
+		keep := true
+		for _, m := range sub.Markets {
+			if _, ok := remove[m]; ok {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			filtered = append(filtered, sub)
+		}
+	}
+	c.subs = filtered
 }
 
 func trimSpace(data []byte) []byte {
@@ -317,21 +409,23 @@ func trimSpace(data []byte) []byte {
 // --- Public API ---
 
 // getMarketConn lazily initializes the market channel connection.
-func (c *Client) getMarketConn(ctx context.Context) *connection {
+// The connection uses context.Background so its lifetime is not tied to any
+// single caller's context; it lives until Client.Close() is called.
+func (c *Client) getMarketConn(_ context.Context) *connection {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.marketConn == nil {
-		c.marketConn = newConnection(ctx, c.endpoint+"/ws/market")
+		c.marketConn = newConnection(context.Background(), c.endpoint+"/ws/market")
 	}
 	return c.marketConn
 }
 
 // getUserConn lazily initializes the user channel connection.
-func (c *Client) getUserConn(ctx context.Context) *connection {
+func (c *Client) getUserConn(_ context.Context) *connection {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.userConn == nil {
-		c.userConn = newConnection(ctx, c.endpoint+"/ws/user")
+		c.userConn = newConnection(context.Background(), c.endpoint+"/ws/user")
 	}
 	return c.userConn
 }
@@ -347,7 +441,7 @@ func (c *Client) SubscribeOrderBook(ctx context.Context, assetIDs ...string) <-c
 		InitialDump: &initialDump,
 	}
 
-	raw := c.getMarketConn(ctx).subscribe(req, EventBook)
+	raw := c.getMarketConn(ctx).subscribe(ctx, req, EventBook)
 	out := make(chan BookUpdate, channelBufferSize)
 	go func() {
 		defer close(out)
@@ -376,7 +470,7 @@ func (c *Client) SubscribePrices(ctx context.Context, assetIDs ...string) <-chan
 		InitialDump: &initialDump,
 	}
 
-	raw := c.getMarketConn(ctx).subscribe(req, EventPriceChange)
+	raw := c.getMarketConn(ctx).subscribe(ctx, req, EventPriceChange)
 	out := make(chan PriceChange, channelBufferSize)
 	go func() {
 		defer close(out)
@@ -405,7 +499,7 @@ func (c *Client) SubscribeLastTradePrice(ctx context.Context, assetIDs ...string
 		InitialDump: &initialDump,
 	}
 
-	raw := c.getMarketConn(ctx).subscribe(req, EventLastTradePrice)
+	raw := c.getMarketConn(ctx).subscribe(ctx, req, EventLastTradePrice)
 	out := make(chan LastTradePrice, channelBufferSize)
 	go func() {
 		defer close(out)
@@ -440,7 +534,7 @@ func (c *Client) SubscribeOrders(ctx context.Context, apiKey, secret, passphrase
 		},
 	}
 
-	raw := c.getUserConn(ctx).subscribe(req, EventOrder)
+	raw := c.getUserConn(ctx).subscribe(ctx, req, EventOrder)
 	out := make(chan OrderUpdate, channelBufferSize)
 	go func() {
 		defer close(out)
@@ -475,12 +569,41 @@ func (c *Client) SubscribeTrades(ctx context.Context, apiKey, secret, passphrase
 		},
 	}
 
-	raw := c.getUserConn(ctx).subscribe(req, EventTrade)
+	raw := c.getUserConn(ctx).subscribe(ctx, req, EventTrade)
 	out := make(chan TradeUpdate, channelBufferSize)
 	go func() {
 		defer close(out)
 		for msg := range raw {
 			var update TradeUpdate
+			if json.Unmarshal(msg, &update) == nil {
+				select {
+				case out <- update:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out
+}
+
+// SubscribeTickSizeChange subscribes to tick size change events for the given asset IDs.
+func (c *Client) SubscribeTickSizeChange(ctx context.Context, assetIDs ...string) <-chan TickSizeChange {
+	initialDump := true
+	req := SubscriptionRequest{
+		Type:        ChannelMarket,
+		Operation:   OpSubscribe,
+		AssetsIDs:   assetIDs,
+		Markets:     []string{},
+		InitialDump: &initialDump,
+	}
+
+	raw := c.getMarketConn(ctx).subscribe(ctx, req, EventTickSizeChange)
+	out := make(chan TickSizeChange, channelBufferSize)
+	go func() {
+		defer close(out)
+		for msg := range raw {
+			var update TickSizeChange
 			if json.Unmarshal(msg, &update) == nil {
 				select {
 				case out <- update:

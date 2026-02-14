@@ -59,6 +59,16 @@ func WithCreds(creds ApiCreds) ClientOption {
 	}
 }
 
+// WithAddress sets the wallet/funder address for L2 authentication when signer
+// is not provided.
+func WithAddress(address string) ClientOption {
+	return func(c *ClobClient) {
+		if common.IsHexAddress(address) {
+			c.address = common.HexToAddress(address)
+		}
+	}
+}
+
 // WithBaseURL overrides the default API base URL.
 func WithBaseURL(url string) ClientOption {
 	return func(c *ClobClient) {
@@ -126,6 +136,9 @@ func (c *ClobClient) l1Headers(nonce int) (http.Header, error) {
 func (c *ClobClient) l2Headers(method, path, body string) (http.Header, error) {
 	if c.creds == nil {
 		return nil, &AuthError{Message: "API credentials required for L2 authentication"}
+	}
+	if c.address == (common.Address{}) {
+		return nil, &AuthError{Message: "address required for L2 authentication; use WithSigner(...) or WithAddress(...)"}
 	}
 	creds := signing.L2Credentials{
 		ApiKey:        c.creds.ApiKey,

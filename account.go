@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/lubluniky/clob-client-go/internal/transport"
 )
@@ -73,19 +74,40 @@ func (c *ClobClient) GetNotifications(ctx context.Context, signatureType Signatu
 // DropNotifications deletes notifications by their IDs.
 // Requires L2 authentication.
 func (c *ClobClient) DropNotifications(ctx context.Context, ids []string) error {
-	reqBody := map[string]interface{}{"ids": ids}
-
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("polymarket: marshalling drop notifications request: %w", err)
-	}
-
-	headers, err := c.l2Headers("DELETE", EndpointNotifications, string(bodyBytes))
+	headers, err := c.l2Headers("DELETE", EndpointNotifications, "")
 	if err != nil {
 		return err
 	}
 
-	resp, err := c.http.Delete(ctx, EndpointNotifications, headers, reqBody)
+	path := EndpointNotifications
+	if len(ids) > 0 {
+		path += "?ids=" + strings.Join(ids, ",")
+	}
+
+	resp, err := c.http.Delete(ctx, path, headers, nil)
+	if err != nil {
+		return err
+	}
+
+	_, err = transport.ParseResponse(resp)
+	return err
+}
+
+// UpdateBalanceAllowance updates balance/allowance state for the provided asset.
+// Requires L2 authentication.
+func (c *ClobClient) UpdateBalanceAllowance(ctx context.Context, params BalanceAllowanceParams) error {
+	query := map[string]string{
+		"asset_type":     params.AssetType,
+		"token_id":       params.TokenID,
+		"signature_type": strconv.Itoa(int(params.SignatureType)),
+	}
+
+	headers, err := c.l2Headers("GET", EndpointUpdateBalanceAllowance, "")
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.http.Get(ctx, EndpointUpdateBalanceAllowance, headers, query)
 	if err != nil {
 		return err
 	}
@@ -97,7 +119,10 @@ func (c *ClobClient) DropNotifications(ctx context.Context, ids []string) error 
 // PostHeartbeat sends a heartbeat signal to keep an active session alive.
 // Requires L2 authentication.
 func (c *ClobClient) PostHeartbeat(ctx context.Context, heartbeatID string) error {
-	reqBody := map[string]interface{}{"id": heartbeatID}
+	reqBody := HeartbeatRequest{HeartbeatID: &heartbeatID}
+	if heartbeatID == "" {
+		reqBody.HeartbeatID = nil
+	}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {

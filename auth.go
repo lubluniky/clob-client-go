@@ -92,16 +92,150 @@ func (c *ClobClient) GetApiKeys(ctx context.Context) ([]ApiKeyResponse, error) {
 		return nil, err
 	}
 
-	// Try array first, then fall back to single object wrapped in array.
+	// Canonical shape: {"apiKeys":[...]}
+	var wrapped ApiKeysResponse
+	if err := json.Unmarshal(raw, &wrapped); err == nil && wrapped.ApiKeys != nil {
+		return wrapped.ApiKeys, nil
+	}
+
+	// Legacy shapes fallback.
 	var keys []ApiKeyResponse
 	if err := json.Unmarshal(raw, &keys); err != nil {
 		var single ApiKeyResponse
 		if err2 := json.Unmarshal(raw, &single); err2 != nil {
 			return nil, fmt.Errorf("polymarket: parsing api keys response: %w", err)
 		}
+		if single.ApiKey == "" {
+			return nil, fmt.Errorf("polymarket: parsing api keys response: missing apiKey")
+		}
 		return []ApiKeyResponse{single}, nil
 	}
 	return keys, nil
+}
+
+// GetClosedOnlyMode returns whether this account is in closed-only mode.
+// Requires L2 authentication.
+func (c *ClobClient) GetClosedOnlyMode(ctx context.Context) (*BanStatus, error) {
+	headers, err := c.l2Headers("GET", EndpointClosedOnly, "")
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.http.Get(ctx, EndpointClosedOnly, headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var result BanStatus
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("polymarket: parsing closed-only mode: %w", err)
+	}
+	return &result, nil
+}
+
+// CreateReadonlyApiKey creates a new readonly API key.
+// Requires L2 authentication.
+func (c *ClobClient) CreateReadonlyApiKey(ctx context.Context) (*ReadonlyApiKeyResponse, error) {
+	headers, err := c.l2Headers("POST", EndpointCreateReadonlyApiKey, "")
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.http.Post(ctx, EndpointCreateReadonlyApiKey, headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var result ReadonlyApiKeyResponse
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("polymarket: parsing readonly api key: %w", err)
+	}
+	return &result, nil
+}
+
+// GetReadonlyApiKeys returns all readonly API keys for this account.
+// Requires L2 authentication.
+func (c *ClobClient) GetReadonlyApiKeys(ctx context.Context) ([]string, error) {
+	headers, err := c.l2Headers("GET", EndpointGetReadonlyApiKeys, "")
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.http.Get(ctx, EndpointGetReadonlyApiKeys, headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := transport.ParseResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var keys []string
+	if err := json.Unmarshal(raw, &keys); err == nil {
+		return keys, nil
+	}
+
+	var wrapped struct {
+		ApiKeys []string `json:"apiKeys"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("polymarket: parsing readonly api keys: %w", err)
+	}
+	return wrapped.ApiKeys, nil
+}
+
+// DeleteReadonlyApiKey deletes one readonly API key.
+// Requires L2 authentication.
+func (c *ClobClient) DeleteReadonlyApiKey(ctx context.Context, key string) error {
+	reqBody := map[string]string{"key": key}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("polymarket: marshalling delete readonly api key request: %w", err)
+	}
+
+	headers, err := c.l2Headers("DELETE", EndpointDeleteReadonlyApiKey, string(bodyBytes))
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.http.Delete(ctx, EndpointDeleteReadonlyApiKey, headers, reqBody)
+	if err != nil {
+		return err
+	}
+	_, err = transport.ParseResponse(resp)
+	return err
+}
+
+// ValidateReadonlyApiKey validates a readonly key for an address.
+// This endpoint is public (L0).
+func (c *ClobClient) ValidateReadonlyApiKey(ctx context.Context, address, key string) (string, error) {
+	resp, err := c.http.Get(ctx, EndpointValidateReadonlyApiKey, c.l0Headers(), map[string]string{
+		"address": address,
+		"key":     key,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	raw, err := transport.ParseResponse(resp)
+	if err != nil {
+		return "", err
+	}
+
+	var result string
+	if err := json.Unmarshal(raw, &result); err != nil {
+		// Fallback to plain text body.
+		return string(raw), nil
+	}
+	return result, nil
 }
 
 // DeleteApiKey deletes the current API key. Requires L2 authentication.

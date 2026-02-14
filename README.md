@@ -145,28 +145,31 @@ func main() {
 ## API Coverage
 
 ### Market Data (L0)
-`ServerTime`, `GetMarkets`, `GetMarket`, `GetSimplifiedMarkets`, `GetOrderBook`, `GetMidpoint`, `GetPrice`, `GetSpread`, `GetLastTradePrice` + batch variants
+`GetOk`, `ServerTime`/`GetServerTime`, `GetMarkets`, `GetSamplingMarkets`, `GetMarket`, `GetSimplifiedMarkets`, `GetSamplingSimplifiedMarkets`, `GetOrderBook`, `GetOrderBooks`, `GetMidpoint`, `GetPrice`, `GetSpread`, `GetLastTradePrice`, `GetPricesHistory` + batch variants
 
 ### Orders (L2)
-`CreateOrder`, `CreateMarketOrder`, `PostOrder`, `CreateAndPostOrder`, `CancelOrder`, `CancelOrders`, `CancelAll`, `GetOrder`, `GetOpenOrders`
+`CreateOrder`, `CreateMarketOrder`, `CalculateMarketPrice`, `PostOrder`, `PostOrders`, `CreateAndPostOrder`, `CreateAndPostMarketOrder`, `CancelOrder`, `CancelOrders`, `CancelMarketOrders`, `CancelAll`, `GetOrder`, `GetOpenOrders`
 
 ### Trades (L2)
-`GetTrades`, `GetMarketTradesEvents`
+`GetTrades`, `GetTradesPaginated`, `GetMarketTradesEvents`
 
 ### Account (L2)
-`GetBalanceAllowance`, `GetNotifications`, `DropNotifications`, `PostHeartbeat`
+`GetBalanceAllowance`, `UpdateBalanceAllowance`, `GetNotifications`, `DropNotifications`, `PostHeartbeat`, `GetClosedOnlyMode`
 
 ### Auth (L1/L2)
-`CreateApiKey`, `DeriveApiKey`, `CreateOrDeriveApiKey`, `GetApiKeys`, `DeleteApiKey`
+`CreateApiKey`, `DeriveApiKey`, `CreateOrDeriveApiKey`, `GetApiKeys`, `DeleteApiKey`, `CreateReadonlyApiKey`, `GetReadonlyApiKeys`, `DeleteReadonlyApiKey`, `ValidateReadonlyApiKey`
+
+### Scoring (L2)
+`IsOrderScoring`, `AreOrdersScoring`
 
 ### RFQ (L2)
 `CreateRfqRequest`, `CancelRfqRequest`, `GetRfqRequests`, `CreateRfqQuote`, `CancelRfqQuote`, `GetRfqRequesterQuotes`, `GetRfqQuoterQuotes`, `GetRfqBestQuote`, `AcceptRfqRequest`, `ApproveRfqQuote`, `GetRfqConfig`
 
 ### Rewards (L0/L2)
-`GetEarningsForDay`, `GetTotalEarnings`, `GetRewardPercentages`, `GetCurrentRewardsMarkets`, `GetRewardsForMarket`, `GetUserMarketRewards`
+`GetEarningsForDay`/`GetEarningsForUserForDay`, `GetTotalEarnings`/`GetTotalEarningsForUserForDay`, `GetRewardPercentages`, `GetCurrentRewardsMarkets`/`GetCurrentRewards`, `GetRewardsForMarket`/`GetRawRewardsForMarket`, `GetUserMarketRewards`/`GetUserEarningsAndMarketsConfig`
 
 ### WebSocket
-`SubscribeOrderBook`, `SubscribePrices`, `SubscribeLastTradePrice`, `SubscribeOrders`, `SubscribeTrades`, `UnsubscribeMarket`, `UnsubscribeUser`
+`SubscribeOrderBook`, `SubscribePrices`, `SubscribeLastTradePrice`, `SubscribeTickSizeChange`, `SubscribeOrders`, `SubscribeTrades`, `UnsubscribeMarket`, `UnsubscribeUser`
 
 ## Features
 
@@ -184,6 +187,7 @@ func main() {
 ```go
 client := polymarket.NewClobClient(
     polymarket.WithSigner(key),                          // ECDSA private key
+    polymarket.WithAddress("0x..."),                     // Optional explicit address for L2 when signer is absent
     polymarket.WithCreds(polymarket.ApiCreds{...}),      // API credentials
     polymarket.WithBaseURL("https://clob.polymarket.com"), // Custom base URL
     polymarket.WithChainID(137),                         // Chain ID (137=Polygon, 80002=Amoy)

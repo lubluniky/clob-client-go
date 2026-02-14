@@ -28,6 +28,17 @@ const (
 	FAK OrderType = "FAK"
 )
 
+// PriceHistoryInterval controls candle window granularity.
+type PriceHistoryInterval string
+
+const (
+	PriceHistoryIntervalMax      PriceHistoryInterval = "max"
+	PriceHistoryIntervalOneWeek  PriceHistoryInterval = "1w"
+	PriceHistoryIntervalOneDay   PriceHistoryInterval = "1d"
+	PriceHistoryIntervalSixHours PriceHistoryInterval = "6h"
+	PriceHistoryIntervalOneHour  PriceHistoryInterval = "1h"
+)
+
 // SignatureType represents the type of signature used for signing orders.
 type SignatureType int
 
@@ -53,35 +64,35 @@ const (
 
 // Market represents the full market object returned by the CLOB API.
 type Market struct {
-	EnableOrderBook        bool            `json:"enable_order_book"`
-	Active                 bool            `json:"active"`
-	Closed                 bool            `json:"closed"`
-	Archived               bool            `json:"archived"`
-	AcceptingOrders        bool            `json:"accepting_orders"`
+	EnableOrderBook         bool            `json:"enable_order_book"`
+	Active                  bool            `json:"active"`
+	Closed                  bool            `json:"closed"`
+	Archived                bool            `json:"archived"`
+	AcceptingOrders         bool            `json:"accepting_orders"`
 	AcceptingOrderTimestamp *string         `json:"accepting_order_timestamp,omitempty"`
-	MinimumOrderSize       decimal.Decimal `json:"minimum_order_size"`
-	MinimumTickSize        decimal.Decimal `json:"minimum_tick_size"`
-	ConditionID            string          `json:"condition_id"`
-	QuestionID             *string         `json:"question_id,omitempty"`
-	Question               string          `json:"question"`
-	Description            string          `json:"description"`
-	MarketSlug             string          `json:"market_slug"`
-	EndDateISO             *string         `json:"end_date_iso,omitempty"`
-	GameStartTime          *string         `json:"game_start_time,omitempty"`
-	SecondsDelay           int             `json:"seconds_delay"`
-	FPMM                   *string         `json:"fpmm,omitempty"`
-	MakerBaseFee           decimal.Decimal `json:"maker_base_fee"`
-	TakerBaseFee           decimal.Decimal `json:"taker_base_fee"`
-	NotificationsEnabled   bool            `json:"notifications_enabled"`
-	NegRisk                bool            `json:"neg_risk"`
-	NegRiskMarketID        *string         `json:"neg_risk_market_id,omitempty"`
-	NegRiskRequestID       *string         `json:"neg_risk_request_id,omitempty"`
-	Icon                   string          `json:"icon"`
-	Image                  string          `json:"image"`
-	Rewards                Rewards         `json:"rewards"`
-	Is5050Outcome          bool            `json:"is_50_50_outcome"`
-	Tokens                 []Token         `json:"tokens"`
-	Tags                   []string        `json:"tags"`
+	MinimumOrderSize        decimal.Decimal `json:"minimum_order_size"`
+	MinimumTickSize         decimal.Decimal `json:"minimum_tick_size"`
+	ConditionID             string          `json:"condition_id"`
+	QuestionID              *string         `json:"question_id,omitempty"`
+	Question                string          `json:"question"`
+	Description             string          `json:"description"`
+	MarketSlug              string          `json:"market_slug"`
+	EndDateISO              *string         `json:"end_date_iso,omitempty"`
+	GameStartTime           *string         `json:"game_start_time,omitempty"`
+	SecondsDelay            int             `json:"seconds_delay"`
+	FPMM                    *string         `json:"fpmm,omitempty"`
+	MakerBaseFee            decimal.Decimal `json:"maker_base_fee"`
+	TakerBaseFee            decimal.Decimal `json:"taker_base_fee"`
+	NotificationsEnabled    bool            `json:"notifications_enabled"`
+	NegRisk                 bool            `json:"neg_risk"`
+	NegRiskMarketID         *string         `json:"neg_risk_market_id,omitempty"`
+	NegRiskRequestID        *string         `json:"neg_risk_request_id,omitempty"`
+	Icon                    string          `json:"icon"`
+	Image                   string          `json:"image"`
+	Rewards                 Rewards         `json:"rewards"`
+	Is5050Outcome           bool            `json:"is_50_50_outcome"`
+	Tokens                  []Token         `json:"tokens"`
+	Tags                    []string        `json:"tags"`
 }
 
 // Rewards holds the reward configuration for a market.
@@ -149,6 +160,13 @@ type OrderArgs struct {
 	Taker      string
 }
 
+// PostOrdersArgs holds one batch entry for PostOrders.
+type PostOrdersArgs struct {
+	Order     SignedOrder
+	OrderType OrderType
+	PostOnly  *bool
+}
+
 // MarketOrderArgs holds the parameters needed to construct a market order
 // (FOK or FAK).
 type MarketOrderArgs struct {
@@ -175,16 +193,16 @@ type SignedOrder struct {
 	Nonce         string        `json:"nonce"`
 	FeeRateBps    string        `json:"feeRateBps"`
 	Side          Side          `json:"side"`
-	SignatureType SignatureType  `json:"signatureType"`
+	SignatureType SignatureType `json:"signatureType"`
 	Signature     string        `json:"signature"`
 }
 
 // PostOrderRequest is the body sent to POST /order.
 type PostOrderRequest struct {
 	Order     SignedOrder `json:"order"`
-	Owner     string     `json:"owner"`
-	OrderType OrderType  `json:"orderType"`
-	PostOnly  bool       `json:"postOnly,omitempty"`
+	Owner     string      `json:"owner"`
+	OrderType OrderType   `json:"orderType"`
+	PostOnly  bool        `json:"postOnly,omitempty"`
 }
 
 // OrderResponse is returned after posting an order.
@@ -215,6 +233,7 @@ type Order struct {
 
 // OpenOrderParams holds optional filter parameters when fetching open orders.
 type OpenOrderParams struct {
+	ID      string
 	Market  string
 	AssetID string
 }
@@ -260,6 +279,7 @@ type MakerOrder struct {
 
 // TradeParams holds optional filter parameters when fetching trades.
 type TradeParams struct {
+	ID      string
 	Market  string
 	AssetID string
 	Maker   string
@@ -280,8 +300,20 @@ type ApiCreds struct {
 
 // ApiKeyResponse is returned when creating or listing API keys.
 type ApiKeyResponse struct {
-	ApiKey    string `json:"apiKey"`
-	CreatedAt string `json:"createdAt,omitempty"`
+	ApiKey     string `json:"apiKey"`
+	Secret     string `json:"secret,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
+	CreatedAt  string `json:"createdAt,omitempty"`
+}
+
+// ApiKeysResponse is the canonical shape returned by get API keys endpoints.
+type ApiKeysResponse struct {
+	ApiKeys []ApiKeyResponse `json:"apiKeys"`
+}
+
+// ReadonlyApiKeyResponse is returned by readonly API key creation.
+type ReadonlyApiKeyResponse struct {
+	ApiKey string `json:"apiKey"`
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +325,14 @@ type BalanceAllowance struct {
 	Balance   string `json:"balance"`
 	Allowance string `json:"allowance"`
 }
+
+// AssetType is the balance/allowance asset domain.
+type AssetType string
+
+const (
+	AssetTypeCollateral  AssetType = "COLLATERAL"
+	AssetTypeConditional AssetType = "CONDITIONAL"
+)
 
 // BalanceAllowanceParams holds the parameters for querying balance/allowance.
 type BalanceAllowanceParams struct {
@@ -307,6 +347,11 @@ type Notification struct {
 	ID      json.Number `json:"id"`
 	Type    json.Number `json:"type"`
 	Message string      `json:"message"`
+}
+
+// BanStatus holds the closed-only trading mode flag.
+type BanStatus struct {
+	ClosedOnly bool `json:"closed_only"`
 }
 
 // ---------------------------------------------------------------------------
@@ -492,4 +537,44 @@ type TradeEvent struct {
 // OrderScoringResponse indicates whether an order is scoring for rewards.
 type OrderScoringResponse struct {
 	Scoring bool `json:"scoring"`
+}
+
+// OrdersScoringResponse maps order ID to scoring status.
+type OrdersScoringResponse map[string]bool
+
+// OrderPayload identifies an order in request bodies.
+type OrderPayload struct {
+	OrderID string `json:"orderID"`
+}
+
+// OrderMarketCancelParams filters which orders to cancel by market/asset.
+type OrderMarketCancelParams struct {
+	Market  string `json:"market,omitempty"`
+	AssetID string `json:"asset_id,omitempty"`
+}
+
+// HeartbeatRequest is the body sent to the heartbeat endpoint.
+type HeartbeatRequest struct {
+	HeartbeatID *string `json:"heartbeat_id"`
+}
+
+// BookParams describes one market-data batch query entry.
+type BookParams struct {
+	TokenID string `json:"token_id"`
+	Side    Side   `json:"side,omitempty"`
+}
+
+// PriceHistoryFilterParams filters historical price data.
+type PriceHistoryFilterParams struct {
+	Market   string
+	StartTS  int64
+	EndTS    int64
+	Fidelity int
+	Interval PriceHistoryInterval
+}
+
+// MarketPrice is one point returned by prices history endpoint.
+type MarketPrice struct {
+	T int64   `json:"t"`
+	P float64 `json:"p"`
 }
