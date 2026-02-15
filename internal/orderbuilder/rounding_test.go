@@ -100,6 +100,58 @@ func TestCalculateLimitOrderAmounts(t *testing.T) {
 	}
 }
 
+func TestCalculateLimitOrderAmounts_TSCrossLanguageVectors(t *testing.T) {
+	// Cross-language test vectors from Polymarket clob-client (TypeScript).
+	tests := []struct {
+		name      string
+		side      string
+		price     string
+		size      string
+		tickSize  string
+		wantMaker string
+		wantTaker string
+	}{
+		// 0.1 tick size BUY
+		{"0.1 BUY 0.5 21.04", "BUY", "0.5", "21.04", "0.1", "10520000", "21040000"},
+		{"0.1 BUY 0.7 170", "BUY", "0.7", "170", "0.1", "119000000", "170000000"},
+		{"0.1 BUY 0.8 101", "BUY", "0.8", "101", "0.1", "80800000", "101000000"},
+		// 0.01 tick size BUY
+		{"0.01 BUY 0.56 21.04", "BUY", "0.56", "21.04", "0.01", "11782400", "21040000"},
+		{"0.01 BUY 0.82 101", "BUY", "0.82", "101", "0.01", "82820000", "101000000"},
+		{"0.01 BUY 0.78 12.8205", "BUY", "0.78", "12.8205", "0.01", "9999600", "12820000"},
+		// 0.001 tick size BUY
+		{"0.001 BUY 0.056 21.04", "BUY", "0.056", "21.04", "0.001", "1178240", "21040000"},
+		{"0.001 BUY 0.082 101", "BUY", "0.082", "101", "0.001", "8282000", "101000000"},
+		{"0.001 BUY 0.078 12.8205", "BUY", "0.078", "12.8205", "0.001", "999960", "12820000"},
+		// 0.0001 tick size BUY
+		{"0.0001 BUY 0.0056 21.04", "BUY", "0.0056", "21.04", "0.0001", "117824", "21040000"},
+		{"0.0001 BUY 0.0082 101", "BUY", "0.0082", "101", "0.0001", "828200", "101000000"},
+		{"0.0001 BUY 0.0078 12.8205", "BUY", "0.0078", "12.8205", "0.0001", "99996", "12820000"},
+		// SELL (mirrored maker/taker)
+		{"0.1 SELL 0.5 21.04", "SELL", "0.5", "21.04", "0.1", "21040000", "10520000"},
+		{"0.1 SELL 0.7 170", "SELL", "0.7", "170", "0.1", "170000000", "119000000"},
+		{"0.1 SELL 0.8 101", "SELL", "0.8", "101", "0.1", "101000000", "80800000"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			price, _ := decimal.NewFromString(tc.price)
+			size, _ := decimal.NewFromString(tc.size)
+
+			maker, taker, err := CalculateLimitOrderAmounts(tc.side, price, size, tc.tickSize)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if maker != tc.wantMaker {
+				t.Errorf("makerAmount: got %s, want %s", maker, tc.wantMaker)
+			}
+			if taker != tc.wantTaker {
+				t.Errorf("takerAmount: got %s, want %s", taker, tc.wantTaker)
+			}
+		})
+	}
+}
+
 func TestCalculateLimitOrderAmounts_InvalidSide(t *testing.T) {
 	price, _ := decimal.NewFromString("0.5")
 	size, _ := decimal.NewFromString("100")

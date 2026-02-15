@@ -13,10 +13,16 @@ import (
 // GetBalanceAllowance returns the balance and allowance for a given asset.
 // Requires L2 authentication.
 func (c *ClobClient) GetBalanceAllowance(ctx context.Context, params BalanceAllowanceParams) (*BalanceAllowance, error) {
-	query := map[string]string{
-		"asset_type":     params.AssetType,
-		"token_id":       params.TokenID,
-		"signature_type": strconv.Itoa(int(params.SignatureType)),
+	query := map[string]string{}
+	if params.AssetType != "" {
+		query["asset_type"] = params.AssetType
+	}
+	if params.TokenID != "" {
+		query["token_id"] = params.TokenID
+	}
+	sigType := c.resolveSignatureType(params.SignatureType)
+	if sigType != SignatureUnset {
+		query["signature_type"] = strconv.Itoa(int(sigType))
 	}
 
 	headers, err := c.l2Headers("GET", EndpointBalanceAllowance, "")
@@ -96,10 +102,16 @@ func (c *ClobClient) DropNotifications(ctx context.Context, ids []string) error 
 // UpdateBalanceAllowance updates balance/allowance state for the provided asset.
 // Requires L2 authentication.
 func (c *ClobClient) UpdateBalanceAllowance(ctx context.Context, params BalanceAllowanceParams) error {
-	query := map[string]string{
-		"asset_type":     params.AssetType,
-		"token_id":       params.TokenID,
-		"signature_type": strconv.Itoa(int(params.SignatureType)),
+	query := map[string]string{}
+	if params.AssetType != "" {
+		query["asset_type"] = params.AssetType
+	}
+	if params.TokenID != "" {
+		query["token_id"] = params.TokenID
+	}
+	sigType := c.resolveSignatureType(params.SignatureType)
+	if sigType != SignatureUnset {
+		query["signature_type"] = strconv.Itoa(int(sigType))
 	}
 
 	headers, err := c.l2Headers("GET", EndpointUpdateBalanceAllowance, "")

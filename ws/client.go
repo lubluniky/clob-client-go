@@ -25,7 +25,8 @@ const (
 
 // Client is a WebSocket client for the Polymarket real-time data API.
 type Client struct {
-	endpoint string
+	endpoint  string
+	parentCtx context.Context
 
 	mu         sync.Mutex
 	marketConn *connection
@@ -40,9 +41,22 @@ func WithEndpoint(endpoint string) Option {
 	return func(c *Client) { c.endpoint = endpoint }
 }
 
+// WithConnectionContext sets the parent context used for WS connection
+// lifecycles. When canceled, active WS reconnect loops stop.
+func WithConnectionContext(ctx context.Context) Option {
+	return func(c *Client) {
+		if ctx != nil {
+			c.parentCtx = ctx
+		}
+	}
+}
+
 // NewClient creates a new WebSocket client.
 func NewClient(opts ...Option) *Client {
-	c := &Client{endpoint: DefaultEndpoint}
+	c := &Client{
+		endpoint:  DefaultEndpoint,
+		parentCtx: context.Background(),
+	}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -409,13 +423,14 @@ func trimSpace(data []byte) []byte {
 // --- Public API ---
 
 // getMarketConn lazily initializes the market channel connection.
-// The connection uses context.Background so its lifetime is not tied to any
-// single caller's context; it lives until Client.Close() is called.
+// By default the connection uses context.Background and lives until
+// Client.Close() is called. With WithConnectionContext, lifecycle follows the
+// configured context.
 func (c *Client) getMarketConn(_ context.Context) *connection {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.marketConn == nil {
-		c.marketConn = newConnection(context.Background(), c.endpoint+"/ws/market")
+		c.marketConn = newConnection(c.parentCtx, c.endpoint+"/ws/market")
 	}
 	return c.marketConn
 }
@@ -425,7 +440,7 @@ func (c *Client) getUserConn(_ context.Context) *connection {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.userConn == nil {
-		c.userConn = newConnection(context.Background(), c.endpoint+"/ws/user")
+		c.userConn = newConnection(c.parentCtx, c.endpoint+"/ws/user")
 	}
 	return c.userConn
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand/v2"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -48,14 +47,10 @@ type OrderData struct {
 // GenerateSalt returns a random integer string suitable for use as an order
 // salt. The value is masked to fit within JavaScript's safe integer range.
 func GenerateSalt() string {
-	// Generate a random salt masked to 2^53-1 for JavaScript compatibility
-	seed := time.Now().UnixNano()
-	r := rand.Float64()
-	salt := int64(float64(seed) * r)
-	if salt < 0 {
-		salt = -salt
-	}
-	salt = salt & MaxSafeInt
+	// Generate a random salt masked to 2^53-1 for JavaScript compatibility.
+	// Uses rand.Int64N directly to avoid float64 precision loss that occurs
+	// when multiplying large nanosecond timestamps by random floats.
+	salt := rand.Int64N(MaxSafeInt)
 	return fmt.Sprintf("%d", salt)
 }
 

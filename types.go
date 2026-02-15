@@ -46,6 +46,7 @@ const (
 	EOA            SignatureType = 0
 	PolyProxy      SignatureType = 1
 	PolyGnosisSafe SignatureType = 2
+	SignatureUnset SignatureType = -1
 )
 
 // TickSize represents valid tick size strings for markets.
@@ -158,6 +159,8 @@ type OrderArgs struct {
 	Nonce      int
 	Expiration int
 	Taker      string
+	// Optional override; defaults to the client's configured signature type.
+	SignatureType SignatureType
 }
 
 // PostOrdersArgs holds one batch entry for PostOrders.
@@ -178,6 +181,8 @@ type MarketOrderArgs struct {
 	Nonce      int
 	Taker      string
 	OrderType  OrderType // FOK or FAK
+	// Optional override; defaults to the client's configured signature type.
+	SignatureType SignatureType
 }
 
 // SignedOrder is the EIP-712 signed order structure sent to the exchange.
@@ -207,9 +212,14 @@ type PostOrderRequest struct {
 
 // OrderResponse is returned after posting an order.
 type OrderResponse struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	ErrorMsg string `json:"errorMsg,omitempty"`
+	ID                 string   `json:"id,omitempty"`
+	OrderID            string   `json:"orderID,omitempty"`
+	Success            bool     `json:"success,omitempty"`
+	Status             string   `json:"status"`
+	ErrorMsg           string   `json:"errorMsg,omitempty"`
+	TransactionsHashes []string `json:"transactionsHashes,omitempty"`
+	TakingAmount       string   `json:"takingAmount,omitempty"`
+	MakingAmount       string   `json:"makingAmount,omitempty"`
 }
 
 // Order represents a full order record as returned by the data API.
@@ -577,4 +587,12 @@ type PriceHistoryFilterParams struct {
 type MarketPrice struct {
 	T int64   `json:"t"`
 	P float64 `json:"p"`
+}
+
+// BuilderApiKey is returned by builder API key endpoints.
+type BuilderApiKey struct {
+	ApiKey     string `json:"apiKey"`
+	Secret     string `json:"secret,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
+	CreatedAt  string `json:"createdAt,omitempty"`
 }

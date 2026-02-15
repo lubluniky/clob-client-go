@@ -2,10 +2,13 @@ package client
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"iter"
 	"strconv"
+	"time"
 
 	"github.com/lubluniky/clob-client-go/internal/transport"
 	"github.com/shopspring/decimal"
@@ -145,6 +148,7 @@ func (c *ClobClient) GetOrderBook(ctx context.Context, tokenID string) (*OrderBo
 	if err := json.Unmarshal(raw, &ob); err != nil {
 		return nil, fmt.Errorf("polymarket: parsing order book: %w", err)
 	}
+	c.updateTickSizeFromOrderBook(ob)
 	return &ob, nil
 }
 
@@ -161,6 +165,9 @@ func (c *ClobClient) GetOrderBooks(ctx context.Context, params []BookParams) ([]
 	var result []OrderBookSummary
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, fmt.Errorf("polymarket: parsing order books: %w", err)
+	}
+	for _, ob := range result {
+		c.updateTickSizeFromOrderBook(ob)
 	}
 	return result, nil
 }
@@ -343,6 +350,82 @@ func (c *ClobClient) GetServerTime(ctx context.Context) (int64, error) {
 	return c.ServerTime(ctx)
 }
 
+// GetOrderBookHash computes a server-compatible SHA-1 hash for an orderbook and
+// stores it into orderbook.Hash.
+func (c *ClobClient) GetOrderBookHash(orderbook *OrderBookSummary) (string, error) {
+	if orderbook == nil {
+		return "", fmt.Errorf("polymarket: orderbook is nil")
+	}
+
+	// Server hash payload uses this field order.
+	type level struct {
+		Price string `json:"price"`
+		Size  string `json:"size"`
+	}
+	type payload struct {
+		Market         string  `json:"market"`
+		AssetID        string  `json:"asset_id"`
+		Timestamp      string  `json:"timestamp"`
+		Hash           string  `json:"hash"`
+		Bids           []level `json:"bids"`
+		Asks           []level `json:"asks"`
+		MinOrderSize   string  `json:"min_order_size"`
+		TickSize       string  `json:"tick_size"`
+		NegRisk        bool    `json:"neg_risk"`
+		LastTradePrice string  `json:"last_trade_price"`
+	}
+
+	bids := make([]level, 0, len(orderbook.Bids))
+	for _, b := range orderbook.Bids {
+		bids = append(bids, level{Price: b.Price, Size: b.Size})
+	}
+	asks := make([]level, 0, len(orderbook.Asks))
+	for _, a := range orderbook.Asks {
+		asks = append(asks, level{Price: a.Price, Size: a.Size})
+	}
+
+	p := payload{
+		Market:         orderbook.Market,
+		AssetID:        orderbook.AssetID,
+		Timestamp:      orderbook.Timestamp,
+		Hash:           "",
+		Bids:           bids,
+		Asks:           asks,
+		MinOrderSize:   orderbook.MinOrderSize,
+		TickSize:       orderbook.TickSize,
+		NegRisk:        orderbook.NegRisk,
+		LastTradePrice: orderbook.LastTradePrice,
+	}
+
+	serialized, err := json.Marshal(p)
+	if err != nil {
+		return "", fmt.Errorf("polymarket: marshalling orderbook hash payload: %w", err)
+	}
+	sum := sha1.Sum(serialized)
+	hash := hex.EncodeToString(sum[:])
+	orderbook.Hash = hash
+	return hash, nil
+}
+
+// ClearTickSizeCache invalidates cached tick sizes for a token or all tokens.
+func (c *ClobClient) ClearTickSizeCache(tokenID ...string) {
+	if len(tokenID) == 0 {
+		c.tickSizes.Range(func(k, _ interface{}) bool {
+			c.tickSizes.Delete(k)
+			return true
+		})
+		c.tickSizesLoaded.Range(func(k, _ interface{}) bool {
+			c.tickSizesLoaded.Delete(k)
+			return true
+		})
+		return
+	}
+	for _, id := range tokenID {
+		c.tickSizes.Delete(id)
+		c.tickSizesLoaded.Delete(id)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Cached metadata lookups
 // ---------------------------------------------------------------------------
@@ -350,7 +433,14 @@ func (c *ClobClient) GetServerTime(ctx context.Context) (int64, error) {
 // GetTickSize returns the tick size for a token (cached after first lookup).
 func (c *ClobClient) GetTickSize(ctx context.Context, tokenID string) (string, error) {
 	if v, ok := c.tickSizes.Load(tokenID); ok {
-		return v.(string), nil
+		if c.tickSizeTTL <= 0 {
+			return v.(string), nil
+		}
+		if ts, okTS := c.tickSizesLoaded.Load(tokenID); okTS {
+			if loadedAt, okT := ts.(time.Time); okT && time.Since(loadedAt) <= c.tickSizeTTL {
+				return v.(string), nil
+			}
+		}
 	}
 	raw, err := c.getJSON(ctx, EndpointTickSize, map[string]string{"token_id": tokenID})
 	if err != nil {
@@ -365,6 +455,7 @@ func (c *ClobClient) GetTickSize(ctx context.Context, tokenID string) (string, e
 	}
 	ts := resp.MinimumTickSize.String()
 	c.tickSizes.Store(tokenID, ts)
+	c.tickSizesLoaded.Store(tokenID, time.Now())
 	return ts, nil
 }
 
@@ -407,4 +498,12 @@ func (c *ClobClient) GetFeeRateBps(ctx context.Context, tokenID string) (string,
 	fr := resp.BaseFee.String()
 	c.feeRates.Store(tokenID, fr)
 	return fr, nil
+}
+
+func (c *ClobClient) updateTickSizeFromOrderBook(ob OrderBookSummary) {
+	if ob.AssetID == "" || ob.TickSize == "" {
+		return
+	}
+	c.tickSizes.Store(ob.AssetID, ob.TickSize)
+	c.tickSizesLoaded.Store(ob.AssetID, time.Now())
 }

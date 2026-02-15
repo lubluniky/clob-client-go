@@ -24,6 +24,27 @@ func sideToInt(s Side) int {
 	return 1
 }
 
+func (r *OrderResponse) normalizeIDs() {
+	if r.ID == "" && r.OrderID != "" {
+		r.ID = r.OrderID
+	}
+	if r.OrderID == "" && r.ID != "" {
+		r.OrderID = r.ID
+	}
+}
+
+func (c *ClobClient) resolveSignatureType(sigType SignatureType) SignatureType {
+	if sigType == SignatureUnset {
+		return c.signatureType
+	}
+	// Backward-compatible default: if caller left zero value and client default
+	// is non-EOA, prefer client default.
+	if sigType == EOA && c.signatureType != EOA {
+		return c.signatureType
+	}
+	return sigType
+}
+
 // CreateOrder builds and signs a limit order from the given OrderArgs.
 // Returns a SignedOrder ready to be posted via PostOrder.
 func (c *ClobClient) CreateOrder(ctx context.Context, args OrderArgs) (*SignedOrder, error) {
@@ -59,11 +80,16 @@ func (c *ClobClient) CreateOrder(ctx context.Context, args OrderArgs) (*SignedOr
 	if taker == "" {
 		taker = ZeroAddress
 	}
+	sigType := c.resolveSignatureType(args.SignatureType)
 
 	signerAddr := crypto.PubkeyToAddress(c.signer.PublicKey)
+	makerAddr := c.address
+	if c.funder != nil {
+		makerAddr = *c.funder
+	}
 
 	orderData := orderbuilder.OrderData{
-		Maker:         c.address,
+		Maker:         makerAddr,
 		Taker:         common.HexToAddress(taker),
 		TokenID:       args.TokenID,
 		MakerAmount:   makerAmt,
@@ -73,7 +99,7 @@ func (c *ClobClient) CreateOrder(ctx context.Context, args OrderArgs) (*SignedOr
 		Nonce:         fmt.Sprintf("%d", args.Nonce),
 		Signer:        signerAddr,
 		Expiration:    fmt.Sprintf("%d", args.Expiration),
-		SignatureType: int(EOA),
+		SignatureType: int(sigType),
 		Salt:          orderbuilder.GenerateSalt(),
 	}
 
@@ -94,7 +120,7 @@ func (c *ClobClient) CreateOrder(ctx context.Context, args OrderArgs) (*SignedOr
 		Nonce:         orderData.Nonce,
 		FeeRateBps:    orderData.FeeRateBps,
 		Side:          args.Side,
-		SignatureType: EOA,
+		SignatureType: sigType,
 		Signature:     sig,
 	}, nil
 }
@@ -144,11 +170,16 @@ func (c *ClobClient) CreateMarketOrder(ctx context.Context, args MarketOrderArgs
 	if taker == "" {
 		taker = ZeroAddress
 	}
+	sigType := c.resolveSignatureType(args.SignatureType)
 
 	signerAddr := crypto.PubkeyToAddress(c.signer.PublicKey)
+	makerAddr := c.address
+	if c.funder != nil {
+		makerAddr = *c.funder
+	}
 
 	orderData := orderbuilder.OrderData{
-		Maker:         c.address,
+		Maker:         makerAddr,
 		Taker:         common.HexToAddress(taker),
 		TokenID:       args.TokenID,
 		MakerAmount:   makerAmt,
@@ -158,7 +189,7 @@ func (c *ClobClient) CreateMarketOrder(ctx context.Context, args MarketOrderArgs
 		Nonce:         fmt.Sprintf("%d", args.Nonce),
 		Signer:        signerAddr,
 		Expiration:    "0",
-		SignatureType: int(EOA),
+		SignatureType: int(sigType),
 		Salt:          orderbuilder.GenerateSalt(),
 	}
 
@@ -179,7 +210,7 @@ func (c *ClobClient) CreateMarketOrder(ctx context.Context, args MarketOrderArgs
 		Nonce:         orderData.Nonce,
 		FeeRateBps:    orderData.FeeRateBps,
 		Side:          args.Side,
-		SignatureType: EOA,
+		SignatureType: sigType,
 		Signature:     sig,
 	}, nil
 }
@@ -228,6 +259,7 @@ func (c *ClobClient) PostOrder(ctx context.Context, order SignedOrder, orderType
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, fmt.Errorf("polymarket: parsing order response: %w", err)
 	}
+	result.normalizeIDs()
 	return &result, nil
 }
 
@@ -286,6 +318,9 @@ func (c *ClobClient) PostOrders(ctx context.Context, args []PostOrdersArgs, defe
 
 	var results []OrderResponse
 	if err := json.Unmarshal(raw, &results); err == nil {
+		for i := range results {
+			results[i].normalizeIDs()
+		}
 		return results, nil
 	}
 
@@ -293,6 +328,7 @@ func (c *ClobClient) PostOrders(ctx context.Context, args []PostOrdersArgs, defe
 	if err := json.Unmarshal(raw, &single); err != nil {
 		return nil, fmt.Errorf("polymarket: parsing post orders response: %w", err)
 	}
+	single.normalizeIDs()
 	return []OrderResponse{single}, nil
 }
 

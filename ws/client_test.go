@@ -67,3 +67,21 @@ func TestSubscribeTickSizeChangeDispatchAndCleanup(t *testing.T) {
 		t.Fatalf("timeout waiting for closed output channel")
 	}
 }
+
+func TestWithConnectionContextControlsLifecycle(t *testing.T) {
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	client := NewClient(WithConnectionContext(parentCtx), WithEndpoint("ws://127.0.0.1:1"))
+
+	conn := client.getMarketConn(context.Background())
+	if conn == nil {
+		t.Fatalf("expected market connection")
+	}
+
+	parentCancel()
+
+	waitFor(t, time.Second, func() bool {
+		return conn.ctx.Err() != nil
+	})
+
+	client.Close()
+}

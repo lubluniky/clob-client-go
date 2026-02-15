@@ -108,6 +108,31 @@ func TestSignClobAuth_Vector(t *testing.T) {
 	}
 }
 
+func TestSignClobAuth_RustCrossLanguageVector(t *testing.T) {
+	// Cross-language test vector from Polymarket rs-clob-client/src/auth.rs.
+	// Uses Amoy (chain 80002), timestamp "10000000", nonce 23.
+	privKeyHex := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+	key, err := crypto.HexToECDSA(privKeyHex)
+	if err != nil {
+		t.Fatalf("failed to parse private key: %v", err)
+	}
+
+	address := crypto.PubkeyToAddress(key.PublicKey).Hex()
+	chainID := 80002
+	timestamp := "10000000"
+	nonce := 23
+
+	sig, err := SignClobAuth(key, chainID, address, timestamp, nonce)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "0xf62319a987514da40e57e2f4d7529f7bac38f0355bd88bb5adbb3768d80de6c1682518e0af677d5260366425f4361e7b70c25ae232aff0ab2331e2b164a1aedc1b"
+	if sig != expected {
+		t.Errorf("signature mismatch with Rust test vector\n  got:  %s\n  want: %s", sig, expected)
+	}
+}
+
 func TestSignClobAuth_DifferentChainIDs(t *testing.T) {
 	privKeyHex := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 	key, err := crypto.HexToECDSA(privKeyHex)

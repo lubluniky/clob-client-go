@@ -290,10 +290,11 @@ func isRetryableError(err error) bool {
 		return true
 	}
 
-	// Check for DNS errors.
+	// Check for DNS errors. Only retry temporary ones; a "not found"
+	// (NXDOMAIN) response is permanent and should not be retried.
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return true
+		return !dnsErr.IsNotFound
 	}
 
 	// Check for operational errors (connection refused, connection reset).
@@ -322,6 +323,9 @@ func isRetryableStatus(code int) bool {
 
 // newRequest builds an *http.Request with the full URL, JSON body, and headers.
 func (c *HTTPClient) newRequest(ctx context.Context, method, path string, headers http.Header, body interface{}) (*http.Request, error) {
+	if path != "" && path[0] != '/' {
+		path = "/" + path
+	}
 	url := c.baseURL + path
 
 	var bodyReader io.Reader
@@ -338,15 +342,17 @@ func (c *HTTPClient) newRequest(ctx context.Context, method, path string, header
 		return nil, fmt.Errorf("polymarket: creating request: %w", err)
 	}
 
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	// Copy all provided headers into the request.
+	// Copy all provided headers into the request first, so caller values
+	// take precedence over defaults.
 	for key, vals := range headers {
 		for _, val := range vals {
 			req.Header.Add(key, val)
 		}
+	}
+
+	// Set Content-Type as a default only if the caller didn't already provide one.
+	if body != nil && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	return req, nil

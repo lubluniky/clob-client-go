@@ -6,7 +6,7 @@ const (
 
 	// Markets
 	EndpointMarkets                   = "/markets"
-	EndpointMarket                    = "/markets/"                    // append conditionID
+	EndpointMarket                    = "/markets/" // append conditionID
 	EndpointSimplifiedMarkets         = "/simplified-markets"
 	EndpointSamplingSimplifiedMarkets = "/sampling-simplified-markets"
 	EndpointSamplingMarkets           = "/sampling-markets"
@@ -29,7 +29,7 @@ const (
 	// Orders
 	EndpointPostOrder          = "/order"
 	EndpointPostOrders         = "/orders"
-	EndpointOrder              = "/data/order/"  // append orderID
+	EndpointOrder              = "/data/order/" // append orderID
 	EndpointOrders             = "/data/orders"
 	EndpointCancelOrder        = "/order"
 	EndpointCancelOrders       = "/orders"
@@ -50,6 +50,9 @@ const (
 	EndpointGetReadonlyApiKeys     = "/auth/readonly-api-keys"
 	EndpointDeleteReadonlyApiKey   = "/auth/readonly-api-key"
 	EndpointValidateReadonlyApiKey = "/auth/validate-readonly-api-key"
+	EndpointCreateBuilderApiKey    = "/auth/builder-api-key"
+	EndpointGetBuilderApiKeys      = "/auth/builder-api-key"
+	EndpointRevokeBuilderApiKey    = "/auth/builder-api-key"
 
 	// Balance
 	EndpointBalanceAllowance       = "/balance-allowance"

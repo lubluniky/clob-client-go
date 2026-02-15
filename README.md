@@ -159,6 +159,9 @@ func main() {
 ### Auth (L1/L2)
 `CreateApiKey`, `DeriveApiKey`, `CreateOrDeriveApiKey`, `GetApiKeys`, `DeleteApiKey`, `CreateReadonlyApiKey`, `GetReadonlyApiKeys`, `DeleteReadonlyApiKey`, `ValidateReadonlyApiKey`
 
+### Builder (L2)
+`CreateBuilderApiKey`, `GetBuilderApiKeys`, `RevokeBuilderApiKey`, `GetBuilderTrades`
+
 ### Scoring (L2)
 `IsOrderScoring`, `AreOrdersScoring`
 
@@ -188,7 +191,10 @@ func main() {
 client := polymarket.NewClobClient(
     polymarket.WithSigner(key),                          // ECDSA private key
     polymarket.WithAddress("0x..."),                     // Optional explicit address for L2 when signer is absent
+    polymarket.WithFunderAddress("0x..."),               // Optional maker/funder address for signed orders
     polymarket.WithCreds(polymarket.ApiCreds{...}),      // API credentials
+    polymarket.WithSignatureType(polymarket.EOA),        // Default signature type
+    polymarket.WithTickSizeTTL(time.Minute),             // Tick-size cache TTL (<=0 disables expiry)
     polymarket.WithBaseURL("https://clob.polymarket.com"), // Custom base URL
     polymarket.WithChainID(137),                         // Chain ID (137=Polygon, 80002=Amoy)
     polymarket.WithHTTPOptions(
@@ -196,6 +202,12 @@ client := polymarket.NewClobClient(
         transport.WithMaxRetries(5),
     ),
 )
+```
+
+WebSocket lifecycle can be tied to a caller context without breaking existing behavior:
+
+```go
+wsClient := ws.NewClient(ws.WithConnectionContext(ctx))
 ```
 
 ## License
